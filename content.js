@@ -149,21 +149,33 @@
     constructor() {
       this.enabled = true;
       this.nearBottomThresholdPx = 600;
+      this.pagingThresholdPx = 80; // when within 80px from edge, turn wheel into paging
       this.lastScrollTop = 0;
       this.toastEl = null;
       this.scrollHandler = this.onScroll.bind(this);
+      this.wheelHandler = this.onWheel.bind(this);
+      this.keyHandler = this.onKeydown.bind(this);
+      this.paginator = null;
     }
 
     setEnabled(isEnabled) {
       this.enabled = Boolean(isEnabled);
     }
 
+    setPaginator(paginator) {
+      this.paginator = paginator;
+    }
+
     attach() {
       window.addEventListener("scroll", this.scrollHandler, { passive: false });
+      window.addEventListener("wheel", this.wheelHandler, { passive: false });
+      window.addEventListener("keydown", this.keyHandler, { passive: false });
     }
 
     detach() {
       window.removeEventListener("scroll", this.scrollHandler);
+      window.removeEventListener("wheel", this.wheelHandler);
+      window.removeEventListener("keydown", this.keyHandler);
     }
 
     showToast(message) {
@@ -195,6 +207,52 @@
         }
       } else {
         this.lastScrollTop = scrollEl.scrollTop;
+      }
+    }
+
+    onWheel(event) {
+      if (!this.enabled) return;
+      if (!this.paginator) return;
+      const scrollEl = getMainScrollableElement();
+      const maxScrollTop = Math.max(0, scrollEl.scrollHeight - window.innerHeight);
+      const distanceToBottom = maxScrollTop - scrollEl.scrollTop;
+      const distanceToTop = scrollEl.scrollTop;
+      // Scroll down near bottom -> go next page
+      if (event.deltaY > 0 && distanceToBottom <= this.pagingThresholdPx) {
+        event.preventDefault();
+        this.paginator.next();
+        return;
+      }
+      // Scroll up near top -> go prev page
+      if (event.deltaY < 0 && distanceToTop <= this.pagingThresholdPx) {
+        event.preventDefault();
+        this.paginator.prev();
+        return;
+      }
+    }
+
+    onKeydown(event) {
+      if (!this.enabled) return;
+      if (!this.paginator) return;
+      const key = event.key;
+      const scrollEl = getMainScrollableElement();
+      const maxScrollTop = Math.max(0, scrollEl.scrollHeight - window.innerHeight);
+      const distanceToBottom = maxScrollTop - scrollEl.scrollTop;
+      const distanceToTop = scrollEl.scrollTop;
+      const nearBottom = distanceToBottom <= this.pagingThresholdPx;
+      const nearTop = distanceToTop <= this.pagingThresholdPx;
+
+      // Space/PageDown go forward; Shift+Space/PageUp go backward
+      if ((key === " ") || (key === "PageDown")) {
+        if (nearBottom) {
+          event.preventDefault();
+          this.paginator.next();
+        }
+      } else if ((key === "PageUp") || (key === " ") && event.shiftKey) {
+        if (nearTop) {
+          event.preventDefault();
+          this.paginator.prev();
+        }
       }
     }
   }
@@ -282,6 +340,7 @@
     if (ensureSingleInjection()) return;
     const paginator = new Paginator({ pageSize: 30, onUpdate: () => {} });
     const blocker = new ScrollBlocker();
+    blocker.setPaginator(paginator);
     blocker.attach();
     const ui = createControlsUI(paginator, blocker);
     document.body.appendChild(ui);
