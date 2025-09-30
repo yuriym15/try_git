@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "X Paginator - Stop Infinite Scroll",
+  "version": "0.1.0",
+  "description": "Paginate tweets on x.com and prevent infinite scroll. Use Prev/Next and Load More.",
+  "host_permissions": [
+    "https://x.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://x.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "X Paginator"
+  }
+}
