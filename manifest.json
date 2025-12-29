@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Tweet Limiter",
+  "name": "Scroll Freeze for X",
   "version": "1.0.0",
   "description": "Limits tweets to 40 per page and disables infinite scroll on Twitter/X",
   "permissions": [],

@@ -1,4 +1,4 @@
-# Tweet Limiter Chrome Extension
+# Scroll Freeze for X
 
 A Chrome extension that limits the number of tweets displayed on Twitter/X to 40 per page and disables infinite scroll.
 
@@ -11,23 +11,12 @@ A Chrome extension that limits the number of tweets displayed on Twitter/X to 40
 
 ## Installation
 
-### Option 1: Install from Source (Developer Mode)
-
 1. Download or clone this repository
 2. Open Chrome and navigate to `chrome://extensions/`
 3. Enable "Developer mode" using the toggle in the top-right corner
 4. Click "Load unpacked"
 5. Select the folder containing this extension
 6. The extension should now be active
-
-### Option 2: Create Icon Files (Optional)
-
-The manifest.json references icon files. You can create your own icons or use placeholders:
-- `icon16.png` (16x16 pixels)
-- `icon48.png` (48x48 pixels)
-- `icon128.png` (128x128 pixels)
-
-If you don't have icons, the extension will still work but may show a default icon.
 
 ## Usage
 
@@ -42,10 +31,10 @@ If you don't have icons, the extension will still work but may show a default ic
 ## How It Works
 
 The extension uses a content script that:
-1. Monitors the page for tweet elements using a MutationObserver
-2. Counts tweets and hides any beyond the 40-tweet limit
-3. Intercepts scroll events and fetch requests to prevent loading additional tweets
-4. Displays a visual indicator when the limit is reached
+1. Intercepts IntersectionObserver, fetch(), and XMLHttpRequest from page load
+2. Blocks any network requests that would load more tweets once 40 are displayed
+3. Uses MutationObserver to immediately remove any tweets beyond the limit
+4. Displays a live counter showing current tweets and blocked requests
 
 ## Customization
 
