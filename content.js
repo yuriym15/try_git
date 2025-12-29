@@ -5,6 +5,7 @@
   const TWEET_LIMIT = 40;
   let tweetCount = 0;
   let limitReached = false;
+  let requestBlockCount = 0;
 
   // Create a visual indicator when limit is reached
   function createLimitIndicator() {
@@ -24,7 +25,7 @@
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
       z-index: 10000;
     `;
-    indicator.textContent = `Tweet limit reached (${TWEET_LIMIT} tweets shown)`;
+    indicator.innerHTML = `Tweet limit reached (${TWEET_LIMIT} tweets shown)<br><small>Requests blocked: ${requestBlockCount}</small>`;
     return indicator;
   }
 
@@ -45,37 +46,94 @@
     });
 
     tweetCount = tweets.length;
+
+    // Update the indicator with blocked request count
+    const indicator = document.getElementById('tweet-limit-indicator');
+    if (indicator && limitReached) {
+      indicator.innerHTML = `Tweet limit reached (${TWEET_LIMIT} tweets shown)<br><small>Requests blocked: ${requestBlockCount}</small>`;
+    }
+
+    // Once we hit the limit, remove loading spinners
+    if (limitReached) {
+      removeLoadingIndicators();
+    }
   }
 
-  // Disable infinite scroll by preventing scroll events from loading more content
-  function disableInfiniteScroll() {
-    // Prevent the page from detecting scroll near bottom
-    let lastScrollY = window.scrollY;
+  // Remove loading spinners and "Show more" buttons
+  function removeLoadingIndicators() {
+    // Remove loading spinners
+    const spinners = document.querySelectorAll('[role="progressbar"], [aria-label="Loading"]');
+    spinners.forEach(spinner => spinner.remove());
 
-    window.addEventListener('scroll', function(e) {
-      const scrolledToBottom = (window.innerHeight + window.scrollY) >= document.documentElement.scrollHeight - 1000;
-
-      if (limitReached && scrolledToBottom) {
-        // Prevent further scrolling down when limit is reached
-        window.scrollTo(0, lastScrollY);
-        e.preventDefault();
-        e.stopPropagation();
-      } else {
-        lastScrollY = window.scrollY;
+    // Remove "Show more tweets" type elements
+    const showMoreButtons = document.querySelectorAll('div[data-testid="cellInnerDiv"]');
+    showMoreButtons.forEach(btn => {
+      if (btn.textContent.includes('Show') || btn.textContent.includes('Loading')) {
+        btn.remove();
       }
-    }, { passive: false, capture: true });
+    });
+  }
 
-    // Block fetch requests that load more tweets
+  // Aggressively block all IntersectionObservers (used by Twitter for infinite scroll)
+  function blockIntersectionObservers() {
+    const OriginalIntersectionObserver = window.IntersectionObserver;
+
+    window.IntersectionObserver = function(callback, options) {
+      // Create the observer but intercept the callback
+      const wrappedCallback = function(entries, observer) {
+        if (limitReached) {
+          // Don't call the original callback when limit is reached
+          console.log('Tweet Limiter: Blocked IntersectionObserver callback');
+          return;
+        }
+        return callback(entries, observer);
+      };
+
+      return new OriginalIntersectionObserver(wrappedCallback, options);
+    };
+
+    // Preserve the original constructor properties
+    window.IntersectionObserver.prototype = OriginalIntersectionObserver.prototype;
+  }
+
+  // Disable infinite scroll by blocking network requests
+  function disableInfiniteScroll() {
+    // Block fetch requests more aggressively
     const originalFetch = window.fetch;
     window.fetch = function(...args) {
-      if (limitReached && args[0] && typeof args[0] === 'string') {
-        // Block Twitter's timeline fetch requests when limit is reached
-        if (args[0].includes('/Timeline') || args[0].includes('/UserTweets')) {
-          console.log('Tweet Limiter: Blocked request to load more tweets');
-          return Promise.reject(new Error('Tweet limit reached'));
+      const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+
+      // Once limit is reached, block ALL timeline-related requests
+      if (limitReached) {
+        if (url.includes('/Timeline') ||
+            url.includes('/UserTweets') ||
+            url.includes('/HomeTimeline') ||
+            url.includes('/HomeLatestTimeline') ||
+            url.includes('adaptive.json') ||
+            url.includes('TweetDetail')) {
+          requestBlockCount++;
+          console.log('Tweet Limiter: Blocked fetch request:', url);
+          return Promise.reject(new Error('Tweet limit reached - request blocked'));
         }
       }
+
       return originalFetch.apply(this, args);
+    };
+
+    // Also intercept XMLHttpRequest
+    const originalOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url) {
+      if (limitReached && typeof url === 'string') {
+        if (url.includes('/Timeline') ||
+            url.includes('/UserTweets') ||
+            url.includes('/HomeTimeline') ||
+            url.includes('adaptive.json')) {
+          requestBlockCount++;
+          console.log('Tweet Limiter: Blocked XHR request:', url);
+          throw new Error('Tweet limit reached - request blocked');
+        }
+      }
+      return originalOpen.apply(this, arguments);
     };
   }
 
@@ -83,6 +141,28 @@
   function observeTweets() {
     const observer = new MutationObserver(function(mutations) {
       limitTweets();
+
+      // If limit is reached, aggressively remove any new content
+      if (limitReached) {
+        mutations.forEach(mutation => {
+          mutation.addedNodes.forEach(node => {
+            if (node.nodeType === 1) { // Element node
+              // If it's a tweet and we're over the limit, remove it immediately
+              if (node.matches && node.matches('article[data-testid="tweet"]')) {
+                const allTweets = document.querySelectorAll('article[data-testid="tweet"]');
+                const index = Array.from(allTweets).indexOf(node);
+                if (index >= TWEET_LIMIT) {
+                  node.remove();
+                }
+              }
+              // Also remove loading indicators
+              if (node.matches && (node.matches('[role="progressbar"]') || node.matches('[aria-label="Loading"]'))) {
+                node.remove();
+              }
+            }
+          });
+        });
+      }
     });
 
     // Start observing the document for changes
@@ -95,19 +175,22 @@
     limitTweets();
   }
 
-  // Initialize when DOM is ready
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function() {
-      observeTweets();
-      disableInfiniteScroll();
-    });
-  } else {
-    observeTweets();
+  // Initialize everything
+  function init() {
+    blockIntersectionObservers();
     disableInfiniteScroll();
+    observeTweets();
+
+    console.log('Tweet Limiter extension loaded - limiting to', TWEET_LIMIT, 'tweets per page');
+  }
+
+  // Start when DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
   }
 
   // Also check periodically in case mutations are missed
-  setInterval(limitTweets, 1000);
-
-  console.log('Tweet Limiter extension loaded - limiting to', TWEET_LIMIT, 'tweets per page');
+  setInterval(limitTweets, 500);
 })();
