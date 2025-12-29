@@ -4,10 +4,11 @@
 
   const TWEET_LIMIT = 40;
   let tweetCount = 0;
-  let limitReached = false;
   let requestBlockCount = 0;
 
-  // Create a visual indicator when limit is reached
+  console.log('Tweet Limiter: Initializing - will limit to', TWEET_LIMIT, 'tweets');
+
+  // Create a visual indicator
   function createLimitIndicator() {
     const indicator = document.createElement('div');
     indicator.id = 'tweet-limit-indicator';
@@ -25,172 +26,155 @@
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
       z-index: 10000;
     `;
-    indicator.innerHTML = `Tweet limit reached (${TWEET_LIMIT} tweets shown)<br><small>Requests blocked: ${requestBlockCount}</small>`;
+    updateIndicator();
     return indicator;
+  }
+
+  function updateIndicator() {
+    const indicator = document.getElementById('tweet-limit-indicator');
+    if (indicator) {
+      indicator.innerHTML = `Tweet limit: ${Math.min(tweetCount, TWEET_LIMIT)}/${TWEET_LIMIT}<br><small>Blocked: ${requestBlockCount}</small>`;
+    }
   }
 
   // Function to count and limit tweets
   function limitTweets() {
-    // Twitter/X uses article elements with specific data attributes for tweets
     const tweets = document.querySelectorAll('article[data-testid="tweet"]');
-
-    tweets.forEach((tweet, index) => {
-      if (index >= TWEET_LIMIT) {
-        tweet.style.display = 'none';
-        if (!limitReached) {
-          limitReached = true;
-          const indicator = createLimitIndicator();
-          document.body.appendChild(indicator);
-        }
-      }
-    });
-
     tweetCount = tweets.length;
 
-    // Update the indicator with blocked request count
-    const indicator = document.getElementById('tweet-limit-indicator');
-    if (indicator && limitReached) {
-      indicator.innerHTML = `Tweet limit reached (${TWEET_LIMIT} tweets shown)<br><small>Requests blocked: ${requestBlockCount}</small>`;
+    // Remove tweets beyond the limit
+    tweets.forEach((tweet, index) => {
+      if (index >= TWEET_LIMIT) {
+        tweet.remove(); // Completely remove instead of hiding
+      }
+    });
+
+    // Update or create indicator
+    let indicator = document.getElementById('tweet-limit-indicator');
+    if (!indicator && tweets.length > 0) {
+      indicator = createLimitIndicator();
+      document.body.appendChild(indicator);
+    } else if (indicator) {
+      updateIndicator();
     }
 
-    // Once we hit the limit, remove loading spinners
-    if (limitReached) {
-      removeLoadingIndicators();
-    }
-  }
-
-  // Remove loading spinners and "Show more" buttons
-  function removeLoadingIndicators() {
     // Remove loading spinners
     const spinners = document.querySelectorAll('[role="progressbar"], [aria-label="Loading"]');
-    spinners.forEach(spinner => spinner.remove());
-
-    // Remove "Show more tweets" type elements
-    const showMoreButtons = document.querySelectorAll('div[data-testid="cellInnerDiv"]');
-    showMoreButtons.forEach(btn => {
-      if (btn.textContent.includes('Show') || btn.textContent.includes('Loading')) {
-        btn.remove();
-      }
+    spinners.forEach(spinner => {
+      const parent = spinner.closest('div[data-testid="cellInnerDiv"]');
+      if (parent) parent.remove();
     });
   }
 
-  // Aggressively block all IntersectionObservers (used by Twitter for infinite scroll)
-  function blockIntersectionObservers() {
-    const OriginalIntersectionObserver = window.IntersectionObserver;
+  // IMMEDIATELY block IntersectionObserver from the start
+  const OriginalIntersectionObserver = window.IntersectionObserver;
+  let observerCount = 0;
 
-    window.IntersectionObserver = function(callback, options) {
-      // Create the observer but intercept the callback
-      const wrappedCallback = function(entries, observer) {
-        if (limitReached) {
-          // Don't call the original callback when limit is reached
-          console.log('Tweet Limiter: Blocked IntersectionObserver callback');
-          return;
-        }
-        return callback(entries, observer);
-      };
+  window.IntersectionObserver = function(callback, options) {
+    observerCount++;
+    const observerId = observerCount;
 
-      return new OriginalIntersectionObserver(wrappedCallback, options);
-    };
+    console.log('Tweet Limiter: IntersectionObserver created #', observerId);
 
-    // Preserve the original constructor properties
-    window.IntersectionObserver.prototype = OriginalIntersectionObserver.prototype;
-  }
+    // Intercept the callback to check tweet count
+    const wrappedCallback = function(entries, observer) {
+      const currentTweetCount = document.querySelectorAll('article[data-testid="tweet"]').length;
 
-  // Disable infinite scroll by blocking network requests
-  function disableInfiniteScroll() {
-    // Block fetch requests more aggressively
-    const originalFetch = window.fetch;
-    window.fetch = function(...args) {
-      const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
-
-      // Once limit is reached, block ALL timeline-related requests
-      if (limitReached) {
-        if (url.includes('/Timeline') ||
-            url.includes('/UserTweets') ||
-            url.includes('/HomeTimeline') ||
-            url.includes('/HomeLatestTimeline') ||
-            url.includes('adaptive.json') ||
-            url.includes('TweetDetail')) {
-          requestBlockCount++;
-          console.log('Tweet Limiter: Blocked fetch request:', url);
-          return Promise.reject(new Error('Tweet limit reached - request blocked'));
-        }
+      // If we already have enough tweets, don't trigger the callback
+      if (currentTweetCount >= TWEET_LIMIT) {
+        console.log('Tweet Limiter: Blocked IntersectionObserver #', observerId, '- already have', currentTweetCount, 'tweets');
+        return; // Don't call the original callback
       }
 
-      return originalFetch.apply(this, args);
+      return callback(entries, observer);
     };
 
-    // Also intercept XMLHttpRequest
-    const originalOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function(method, url) {
-      if (limitReached && typeof url === 'string') {
-        if (url.includes('/Timeline') ||
-            url.includes('/UserTweets') ||
-            url.includes('/HomeTimeline') ||
-            url.includes('adaptive.json')) {
-          requestBlockCount++;
-          console.log('Tweet Limiter: Blocked XHR request:', url);
-          throw new Error('Tweet limit reached - request blocked');
-        }
+    return new OriginalIntersectionObserver(wrappedCallback, options);
+  };
+
+  window.IntersectionObserver.prototype = OriginalIntersectionObserver.prototype;
+
+  // IMMEDIATELY block fetch requests from the start
+  const originalFetch = window.fetch;
+  window.fetch = function(...args) {
+    const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+    const currentTweetCount = document.querySelectorAll('article[data-testid="tweet"]').length;
+
+    // Block timeline requests if we already have enough tweets
+    if (currentTweetCount >= TWEET_LIMIT) {
+      if (url.includes('graphql') ||
+          url.includes('/Timeline') ||
+          url.includes('/UserTweets') ||
+          url.includes('/HomeTimeline') ||
+          url.includes('/HomeLatestTimeline') ||
+          url.includes('adaptive.json')) {
+        requestBlockCount++;
+        console.log('Tweet Limiter: BLOCKED fetch -', url.substring(0, 100));
+        updateIndicator();
+        return Promise.reject(new Error('Tweet limit reached'));
       }
-      return originalOpen.apply(this, arguments);
-    };
-  }
+    }
 
-  // Set up MutationObserver to watch for new tweets being added
-  function observeTweets() {
-    const observer = new MutationObserver(function(mutations) {
-      limitTweets();
+    return originalFetch.apply(this, args);
+  };
 
-      // If limit is reached, aggressively remove any new content
-      if (limitReached) {
-        mutations.forEach(mutation => {
-          mutation.addedNodes.forEach(node => {
-            if (node.nodeType === 1) { // Element node
-              // If it's a tweet and we're over the limit, remove it immediately
-              if (node.matches && node.matches('article[data-testid="tweet"]')) {
-                const allTweets = document.querySelectorAll('article[data-testid="tweet"]');
-                const index = Array.from(allTweets).indexOf(node);
-                if (index >= TWEET_LIMIT) {
-                  node.remove();
-                }
-              }
-              // Also remove loading indicators
-              if (node.matches && (node.matches('[role="progressbar"]') || node.matches('[aria-label="Loading"]'))) {
-                node.remove();
-              }
-            }
-          });
-        });
+  // IMMEDIATELY block XMLHttpRequest from the start
+  const originalOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url) {
+    const currentTweetCount = document.querySelectorAll('article[data-testid="tweet"]').length;
+
+    if (currentTweetCount >= TWEET_LIMIT && typeof url === 'string') {
+      if (url.includes('graphql') ||
+          url.includes('/Timeline') ||
+          url.includes('/UserTweets') ||
+          url.includes('/HomeTimeline')) {
+        requestBlockCount++;
+        console.log('Tweet Limiter: BLOCKED XHR -', url.substring(0, 100));
+        updateIndicator();
+        throw new Error('Tweet limit reached');
       }
-    });
+    }
 
-    // Start observing the document for changes
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
+    return originalOpen.apply(this, arguments);
+  };
 
-    // Initial check
+  // Aggressively watch for and remove tweets over the limit
+  const observer = new OriginalIntersectionObserver(function(mutations) {
     limitTweets();
+  });
+
+  // Watch for any DOM changes
+  const mutationObserver = new MutationObserver(function(mutations) {
+    limitTweets();
+
+    // Immediately remove any tweet elements being added over the limit
+    const tweets = document.querySelectorAll('article[data-testid="tweet"]');
+    if (tweets.length > TWEET_LIMIT) {
+      for (let i = TWEET_LIMIT; i < tweets.length; i++) {
+        tweets[i].remove();
+        console.log('Tweet Limiter: Removed tweet #', i + 1);
+      }
+    }
+  });
+
+  // Start observing as soon as possible
+  function startObserving() {
+    if (document.body) {
+      mutationObserver.observe(document.body, {
+        childList: true,
+        subtree: true
+      });
+      console.log('Tweet Limiter: Started observing DOM');
+      limitTweets();
+    } else {
+      setTimeout(startObserving, 100);
+    }
   }
 
-  // Initialize everything
-  function init() {
-    blockIntersectionObservers();
-    disableInfiniteScroll();
-    observeTweets();
+  startObserving();
 
-    console.log('Tweet Limiter extension loaded - limiting to', TWEET_LIMIT, 'tweets per page');
-  }
+  // Check very frequently
+  setInterval(limitTweets, 250);
 
-  // Start when DOM is ready
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
-
-  // Also check periodically in case mutations are missed
-  setInterval(limitTweets, 500);
+  console.log('Tweet Limiter: Fully initialized');
 })();
